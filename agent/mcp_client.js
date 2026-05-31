@@ -116,46 +116,54 @@ function getMockDynatraceMcpMetrics(nodeId) {
   };
 }
 
-// Command Line Interface
-const args = process.argv.slice(2);
-const nodeIdArg = args.find(arg => arg.startsWith('--node-id='))?.split('=')[1] || 'node-us-east-412';
-const serverPathArg = args.find(arg => arg.startsWith('--server-path='))?.split('=')[1];
-const mockMode = args.includes('--mock') || !serverPathArg;
+// Command Line Interface & Module Exports
+if (require.main === module) {
+  const args = process.argv.slice(2);
+  const nodeIdArg = args.find(arg => arg.startsWith('--node-id='))?.split('=')[1] || 'node-us-east-412';
+  const serverPathArg = args.find(arg => arg.startsWith('--server-path='))?.split('=')[1];
+  const mockMode = args.includes('--mock') || !serverPathArg;
 
-if (mockMode) {
-  console.log(`[INFO] Running in MCP Mock Client mode for node: ${nodeIdArg}`);
-  const payload = getMockDynatraceMcpMetrics(nodeIdArg);
-  try {
-    validateTelemetry(payload);
-    console.log('✓ Mock Telemetry retrieved successfully:');
-    console.log(JSON.stringify(payload, null, 2));
-  } catch (err) {
-    console.error('✗ Telemetry validation failed:', err.message);
-    process.exit(1);
+  if (mockMode) {
+    console.log(`[INFO] Running in MCP Mock Client mode for node: ${nodeIdArg}`);
+    const payload = getMockDynatraceMcpMetrics(nodeIdArg);
+    try {
+      validateTelemetry(payload);
+      console.log('✓ Mock Telemetry retrieved successfully:');
+      console.log(JSON.stringify(payload, null, 2));
+    } catch (err) {
+      console.error('✗ Telemetry validation failed:', err.message);
+      process.exit(1);
+    }
+  } else {
+    console.log(`[INFO] Connecting to Dynatrace MCP Server: ${serverPathArg}`);
+    queryMcpServerStdio(serverPathArg, nodeIdArg)
+      .then(response => {
+        // Map response to telemetry schema if nested differently
+        // In MCP standard, response.result.contents[0].text contains stringified resource or JSON
+        let payload;
+        try {
+          if (response.result && response.result.contents && response.result.contents[0]) {
+            payload = JSON.parse(response.result.contents[0].text);
+          } else {
+            payload = response;
+          }
+        } catch (err) {
+          throw new Error(`MCP result not in expected format: ${err.message}`);
+        }
+
+        validateTelemetry(payload);
+        console.log('✓ Telemetry retrieved from MCP Server and verified successfully:');
+        console.log(JSON.stringify(payload, null, 2));
+      })
+      .catch(err => {
+        console.error('✗ MCP Retrieval failed:', err.message);
+        process.exit(1);
+      });
   }
 } else {
-  console.log(`[INFO] Connecting to Dynatrace MCP Server: ${serverPathArg}`);
-  queryMcpServerStdio(serverPathArg, nodeIdArg)
-    .then(response => {
-      // Map response to telemetry schema if nested differently
-      // In MCP standard, response.result.contents[0].text contains stringified resource or JSON
-      let payload;
-      try {
-        if (response.result && response.result.contents && response.result.contents[0]) {
-          payload = JSON.parse(response.result.contents[0].text);
-        } else {
-          payload = response;
-        }
-      } catch (err) {
-        throw new Error(`MCP result not in expected format: ${err.message}`);
-      }
-
-      validateTelemetry(payload);
-      console.log('✓ Telemetry retrieved from MCP Server and verified successfully:');
-      console.log(JSON.stringify(payload, null, 2));
-    })
-    .catch(err => {
-      console.error('✗ MCP Retrieval failed:', err.message);
-      process.exit(1);
-    });
+  module.exports = {
+    validateTelemetry,
+    getMockDynatraceMcpMetrics
+  };
 }
+
