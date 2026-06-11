@@ -69,10 +69,10 @@ if [ "$LOOP" = true ]; then
             sleep 5
         done
     ) | \
-    python3 "${SCRIPT_DIR}/agent/validator.py" --prompt "${SCRIPT_DIR}/agent/system_prompt.txt" --input - --json-only | \
-    python3 "${SCRIPT_DIR}/execution/handler.py"
+    python3 -u "${SCRIPT_DIR}/agent/validator.py" --prompt "${SCRIPT_DIR}/agent/system_prompt.txt" --input - --json-only | \
+    python3 -u "${SCRIPT_DIR}/execution/handler.py"
 else
     node "${SCRIPT_DIR}/agent/mcp_client.js" --mock --mode="${MODE}" --node-id="${NODE_ID}" --json-only | \
-    python3 "${SCRIPT_DIR}/agent/validator.py" --prompt "${SCRIPT_DIR}/agent/system_prompt.txt" --input - --json-only | \
-    python3 "${SCRIPT_DIR}/execution/handler.py"
+    python3 -u "${SCRIPT_DIR}/agent/validator.py" --prompt "${SCRIPT_DIR}/agent/system_prompt.txt" --input - --json-only | \
+    python3 -u "${SCRIPT_DIR}/execution/handler.py"
 fi
