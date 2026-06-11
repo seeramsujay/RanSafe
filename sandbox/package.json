@@ -1,0 +1,15 @@
+{
+  "name": "ransafe-sandbox",
+  "version": "1.0.0",
+  "description": "Victim container workload with OpenTelemetry tracing",
+  "main": "microservice.js",
+  "scripts": {
+    "start": "node --require ./tracing.js microservice.js"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/sdk-node": "^0.53.0",
+    "@opentelemetry/auto-instrumentations-node": "^0.47.0",
+    "@opentelemetry/exporter-trace-otlp-proto": "^0.53.0"
+  }
+}
