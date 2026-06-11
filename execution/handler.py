@@ -699,7 +699,10 @@ if __name__ == "__main__":
                                 with open('/dev/tty', 'r') as tty:
                                     choice = tty.readline().strip().lower()
                             except Exception:
-                                choice = input().strip().lower()
+                                try:
+                                    choice = input().strip().lower()
+                                except (EOFError, Exception):
+                                    sys.exit(0)
                             
                             if choice in ['r', 'restore']:
                                 execute_restore(target_asset)
