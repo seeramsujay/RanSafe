@@ -104,7 +104,28 @@ function queryMcpServerStdio(serverPath, nodeId) {
 /**
  * Mock response generator when Lane 2 Dynatrace MCP server is offline.
  */
-function getMockDynatraceMcpMetrics(nodeId) {
+function getMockDynatraceMcpMetrics(nodeId, mode = 'ransomware') {
+  if (mode === 'normal') {
+    return {
+      node_id: nodeId,
+      metrics: {
+        cpu_utilization_percentage: 24.5,
+        filesystem_write_ops_per_sec: 15,
+        entropy_coefficient: 0.182
+      },
+      timestamp: new Date().toISOString()
+    };
+  } else if (mode === 'reallocate') {
+    return {
+      node_id: nodeId,
+      metrics: {
+        cpu_utilization_percentage: 78.4,
+        filesystem_write_ops_per_sec: 22,
+        entropy_coefficient: 0.150
+      },
+      timestamp: new Date().toISOString()
+    };
+  }
   return {
     node_id: nodeId,
     metrics: {
@@ -121,21 +142,31 @@ if (require.main === module) {
   const args = process.argv.slice(2);
   const nodeIdArg = args.find(arg => arg.startsWith('--node-id='))?.split('=')[1] || 'node-us-east-412';
   const serverPathArg = args.find(arg => arg.startsWith('--server-path='))?.split('=')[1];
+  const modeArg = args.find(arg => arg.startsWith('--mode='))?.split('=')[1] || 'ransomware';
   const mockMode = args.includes('--mock') || !serverPathArg;
+  const jsonOnly = args.includes('--json-only');
 
   if (mockMode) {
-    console.log(`[INFO] Running in MCP Mock Client mode for node: ${nodeIdArg}`);
-    const payload = getMockDynatraceMcpMetrics(nodeIdArg);
+    if (!jsonOnly) {
+      console.log(`[INFO] Running in MCP Mock Client mode for node: ${nodeIdArg} (${modeArg})`);
+    }
+    const payload = getMockDynatraceMcpMetrics(nodeIdArg, modeArg);
     try {
       validateTelemetry(payload);
-      console.log('✓ Mock Telemetry retrieved successfully:');
-      console.log(JSON.stringify(payload, null, 2));
+      if (!jsonOnly) {
+        console.log('✓ Mock Telemetry retrieved successfully:');
+        console.log(JSON.stringify(payload, null, 2));
+      } else {
+        console.log(JSON.stringify(payload));
+      }
     } catch (err) {
       console.error('✗ Telemetry validation failed:', err.message);
       process.exit(1);
     }
   } else {
-    console.log(`[INFO] Connecting to Dynatrace MCP Server: ${serverPathArg}`);
+    if (!jsonOnly) {
+      console.log(`[INFO] Connecting to Dynatrace MCP Server: ${serverPathArg}`);
+    }
     queryMcpServerStdio(serverPathArg, nodeIdArg)
       .then(response => {
         // Map response to telemetry schema if nested differently
@@ -152,8 +183,12 @@ if (require.main === module) {
         }
 
         validateTelemetry(payload);
-        console.log('✓ Telemetry retrieved from MCP Server and verified successfully:');
-        console.log(JSON.stringify(payload, null, 2));
+        if (!jsonOnly) {
+          console.log('✓ Telemetry retrieved from MCP Server and verified successfully:');
+          console.log(JSON.stringify(payload, null, 2));
+        } else {
+          console.log(JSON.stringify(payload));
+        }
       })
       .catch(err => {
         console.error('✗ MCP Retrieval failed:', err.message);

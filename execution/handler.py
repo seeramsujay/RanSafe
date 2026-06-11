@@ -3,6 +3,12 @@ import json
 import os
 import subprocess
 from datetime import datetime
+import threading
+import time
+import socket
+import http.server
+import socketserver
+import re
 
 # ANSI Colors
 RESET = "\033[0m"
@@ -30,23 +36,45 @@ BANNER = f"""{RED}{BOLD}
  |_| \\_\\\\__,_|_| |_|____/ \\__,_|\\___|_|  \\___|
 {RESET}"""
 
-runtime_logs = []
+# Global State Dictionary for the Orchestrator
+state = {
+    "status": "NOMINAL", # NOMINAL, PENDING_CONFIRMATION, AIRGAP_ACTIVE, REALLOCATE_RESOURCES, MONITOR_INTENSE
+    "target_node_id": "k8s-pod-node-dummy-app-xyz",
+    "authorization_token": "",
+    "reasoning_summary": "",
+    "metrics": {
+        "cpu_utilization_percentage": 0.0,
+        "filesystem_write_ops_per_sec": 0,
+        "entropy_coefficient": 0.0
+    },
+    "logs": []
+}
+
+state_lock = threading.Lock()
+confirm_event = threading.Event()
+cancel_event = threading.Event()
+
+PORT = 8080
 
 def log_info(msg):
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-    runtime_logs.append(f"{BLUE}[{timestamp}] [INFO] {msg}{RESET}")
+    with state_lock:
+        state["logs"].append(f"{BLUE}[{timestamp}] [INFO] {msg}{RESET}")
 
 def log_warn(msg):
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-    runtime_logs.append(f"{YELLOW}[{timestamp}] [WARN] {msg}{RESET}")
+    with state_lock:
+        state["logs"].append(f"{YELLOW}[{timestamp}] [WARN] {msg}{RESET}")
 
 def log_err(msg):
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-    runtime_logs.append(f"{RED}[{timestamp}] [ERROR] {msg}{RESET}")
+    with state_lock:
+        state["logs"].append(f"{RED}[{timestamp}] [ERROR] {msg}{RESET}")
 
 def log_success(msg):
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-    runtime_logs.append(f"{GREEN}[{timestamp}] [SUCCESS] {msg}{RESET}")
+    with state_lock:
+        state["logs"].append(f"{GREEN}[{timestamp}] [SUCCESS] {msg}{RESET}")
 
 def render_ui(action, target, token="", reasoning="", logs=[]):
     """Clears screen and draws a high-fidelity, colored cybersecurity console."""
@@ -61,10 +89,14 @@ def render_ui(action, target, token="", reasoning="", logs=[]):
     monitored_node = f"{YELLOW}{target}{RESET}"
     auth_token = f"{MAGENTA}{token if token else 'N/A'}{RESET}"
     
-    if action == "AIRGAP_NODE":
+    if action == "AIRGAP_NODE" or action == "AIRGAP_ACTIVE":
         action_str = f"{RED}{BOLD}AIRGAP_NODE{RESET}"
         switch_str = f"{BG_RED}{WHITE}{BOLD} 🚨 OPENED - CRITICAL ANOMALY AIRGAP ACTIVE {RESET}"
         integrity_str = f"{RED}{BOLD}🔥 ATTACK VECTOR MITIGATED IN REAL-TIME{RESET}"
+    elif action == "PENDING_CONFIRMATION":
+        action_str = f"{RED}{BOLD}PENDING_CONFIRMATION{RESET}"
+        switch_str = f"{BG_RED}{WHITE}{BOLD} ⚠️  AWAITING OPERATOR CONTAINER OVERRIDE ACTION {RESET}"
+        integrity_str = f"{RED}{BOLD}⚠️ SUSPECTED ACTIVE RANSOMWARE ENCRYPTION FLOW{RESET}"
     elif action == "REALLOCATE_RESOURCES":
         action_str = f"{GREEN}{BOLD}REALLOCATE_RESOURCES{RESET}"
         switch_str = f"{BG_YELLOW}{WHITE}{BOLD} 🟢 CLOSED - ACTIVE RESOURCE AUTOMATION {RESET}"
@@ -99,6 +131,186 @@ def render_ui(action, target, token="", reasoning="", logs=[]):
         print(f"  {BLUE}[INFO] Pipeline active. Awaiting autonomous evaluation matrix...{RESET}")
     print(f"{CYAN}=" * 80 + f"{RESET}")
 
+def execute_airgap(target_asset, action_token, auth_token, ai_reasoning):
+    log_info(f"Routing action {action_token} to airgap_rules.sh...")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    airgap_script = os.path.join(script_dir, "airgap_rules.sh")
+    
+    try:
+        os.chmod(airgap_script, 0o755)
+    except Exception:
+        pass
+    
+    proc = subprocess.run(
+        [airgap_script, target_asset, action_token, auth_token, ai_reasoning],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+    
+    # Process script output into logs
+    for outline in proc.stdout.splitlines():
+        if outline.strip():
+            if "Success" in outline or "verified" in outline or "✅" in outline:
+                log_success(outline.strip())
+            elif "ERROR" in outline or "❌" in outline:
+                log_err(outline.strip())
+            elif "WARNING" in outline or "⚠️" in outline:
+                log_warn(outline.strip())
+            else:
+                log_info(outline.strip())
+                
+    for errline in proc.stderr.splitlines():
+        if errline.strip():
+            log_err(errline.strip())
+            
+    if proc.returncode == 0:
+        log_success(f"Execution engine successfully applied action: {action_token}")
+    else:
+        log_err(f"Execution script exited with error code {proc.returncode}")
+
+def execute_restore(target_asset):
+    log_info(f"Routing recovery request to restore_network.sh for node '{target_asset}'...")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    restore_script = os.path.join(script_dir, "restore_network.sh")
+    
+    try:
+        os.chmod(restore_script, 0o755)
+    except Exception:
+        pass
+    
+    proc = subprocess.run(
+        [restore_script, target_asset],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+    
+    for outline in proc.stdout.splitlines():
+        if outline.strip():
+            if "Success" in outline or "verified" in outline or "✅" in outline:
+                log_success(outline.strip())
+            elif "ERROR" in outline or "❌" in outline:
+                log_err(outline.strip())
+            elif "WARNING" in outline or "⚠️" in outline:
+                log_warn(outline.strip())
+            else:
+                log_info(outline.strip())
+                
+    for errline in proc.stderr.splitlines():
+        if errline.strip():
+            log_err(errline.strip())
+            
+    if proc.returncode == 0:
+        log_success(f"Network recovery completed for {target_asset}")
+        with state_lock:
+            state["status"] = "NOMINAL"
+            render_ui("NOMINAL", target_asset, "", "", state["logs"])
+    else:
+        log_err(f"Restore script exited with error code {proc.returncode}")
+
+class RanSafeWebServer(http.server.BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        # Override to suppress HTTP logging in terminal
+        pass
+
+    def do_GET(self):
+        if self.path == "/events":
+            self.handle_sse()
+        elif self.path == "/" or self.path == "/index.html":
+            self.serve_file("index.html", "text/html")
+        elif self.path == "/style.css":
+            self.serve_file("style.css", "text/css")
+        elif self.path == "/app.js":
+            self.serve_file("app.js", "application/javascript")
+        else:
+            self.send_error(404, "File Not Found")
+
+    def do_POST(self):
+        if self.path == "/api/confirm":
+            confirm_event.set()
+            self.send_json_response({"status": "success", "message": "Airgap action confirmed"})
+        elif self.path == "/api/cancel":
+            cancel_event.set()
+            self.send_json_response({"status": "success", "message": "Airgap action cancelled"})
+        elif self.path == "/api/restore":
+            target = None
+            with state_lock:
+                target = state["target_node_id"]
+            if target:
+                threading.Thread(target=execute_restore, args=(target,), daemon=True).start()
+                self.send_json_response({"status": "success", "message": f"Network restoration triggered for {target}"})
+            else:
+                self.send_json_response({"status": "error", "message": "No target node active for restoration"}, 400)
+        else:
+            self.send_error(404, "API Endpoint Not Found")
+
+    def serve_file(self, filename, content_type):
+        web_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+        filepath = os.path.join(web_dir, filename)
+        if not os.path.exists(filepath):
+            self.send_error(404, f"{filename} Not Found")
+            return
+        
+        try:
+            with open(filepath, "rb") as f:
+                content = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+        except Exception as e:
+            self.send_error(500, f"Internal Server Error: {e}")
+
+    def send_json_response(self, data, status=200):
+        try:
+            content = json.dumps(data).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(content)
+        except Exception:
+            pass
+
+    def handle_sse(self):
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream')
+        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('Connection', 'keep-alive')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        
+        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+        
+        while True:
+            try:
+                with state_lock:
+                    clean_logs = [ansi_escape.sub('', log) for log in state["logs"]]
+                    state_data = {
+                        "status": state["status"],
+                        "target_node_id": state["target_node_id"],
+                        "authorization_token": state["authorization_token"],
+                        "reasoning_summary": state["reasoning_summary"],
+                        "metrics": state["metrics"],
+                        "logs": clean_logs
+                    }
+                payload = f"data: {json.dumps(state_data)}\n\n"
+                self.wfile.write(payload.encode('utf-8'))
+                self.wfile.flush()
+            except (socket.error, ConnectionResetError, BrokenPipeError):
+                break
+            time.sleep(0.5)
+
+def start_web_server():
+    server_address = ('', PORT)
+    socketserver.TCPServer.allow_reuse_address = True
+    with socketserver.TCPServer(server_address, RanSafeWebServer) as httpd:
+        log_info(f"Web Dashboard server running on http://localhost:{PORT}")
+        httpd.serve_forever()
+
 if __name__ == "__main__":
     # Check for jsonschema availability
     try:
@@ -117,7 +329,13 @@ if __name__ == "__main__":
 
     # Render baseline monitoring view
     log_info("RanSafe Execution Orchestrator Daemon initialized.")
-    render_ui("NOMINAL", "k8s-pod-node-dummy-app-xyz", "", "", runtime_logs)
+    
+    # Start web server thread
+    web_thread = threading.Thread(target=start_web_server, daemon=True)
+    web_thread.start()
+    
+    with state_lock:
+        render_ui("NOMINAL", state["target_node_id"], "", "", state["logs"])
 
     # Stream payload records from standard input
     for line in sys.stdin:
@@ -133,7 +351,8 @@ if __name__ == "__main__":
                     log_success("Payload successfully validated against execution_interface.json schema.")
                 except jsonschema.exceptions.ValidationError as ve:
                     log_err(f"Schema Validation Failed: {ve.message}")
-                    render_ui("NOMINAL", "unknown-node", "", "", runtime_logs)
+                    with state_lock:
+                        render_ui("NOMINAL", "unknown-node", "", "", state["logs"])
                     continue
             else:
                 # Basic validation fallback
@@ -141,66 +360,100 @@ if __name__ == "__main__":
                 missing = [f for f in required if f not in payload]
                 if missing:
                     log_err(f"Payload missing required fields: {missing}")
-                    render_ui("NOMINAL", "unknown-node", "", "", runtime_logs)
+                    with state_lock:
+                        render_ui("NOMINAL", "unknown-node", "", "", state["logs"])
                     continue
 
             action_token = payload.get("action")
             target_asset = payload.get("target_node_id")
             auth_token = payload.get("authorization_token")
             ai_reasoning = payload.get("reasoning_summary")
+            metrics = payload.get("metrics", {
+                "cpu_utilization_percentage": 0.0,
+                "filesystem_write_ops_per_sec": 0,
+                "entropy_coefficient": 0.0
+            })
+            
+            with state_lock:
+                state["target_node_id"] = target_asset
+                state["authorization_token"] = auth_token
+                state["reasoning_summary"] = ai_reasoning
+                state["metrics"] = metrics
             
             if action_token in ["AIRGAP_NODE", "REALLOCATE_RESOURCES", "MONITOR_INTENSE"]:
-                log_info(f"Routing action {action_token} to airgap_rules.sh...")
-                
-                # Locate and execute airgap script
-                script_dir = os.path.dirname(os.path.abspath(__file__))
-                airgap_script = os.path.join(script_dir, "airgap_rules.sh")
-                
-                # Make script executable
-                try:
-                    os.chmod(airgap_script, 0o755)
-                except Exception:
-                    pass
-                
-                # Execute physical system changes using the bash script
-                proc = subprocess.run(
-                    [airgap_script, target_asset, action_token, auth_token, ai_reasoning],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True
-                )
-                
-                # Process script output into live logs
-                for outline in proc.stdout.splitlines():
-                    if outline.strip():
-                        if "Success" in outline or "verified" in outline or "✅" in outline:
-                            log_success(outline.strip())
-                        elif "ERROR" in outline or "❌" in outline:
-                            log_err(outline.strip())
-                        elif "WARNING" in outline or "⚠️" in outline:
-                            log_warn(outline.strip())
-                        else:
-                            log_info(outline.strip())
-                            
-                for errline in proc.stderr.splitlines():
-                    if errline.strip():
-                        log_err(errline.strip())
-                
-                if proc.returncode == 0:
-                    log_success(f"Execution engine successfully applied action: {action_token}")
-                else:
-                    log_err(f"Execution script exited with error code {proc.returncode}")
-                
-                render_ui(action_token, target_asset, auth_token, ai_reasoning, runtime_logs)
-                
                 if action_token == "AIRGAP_NODE":
-                    print(f"\n{RED}{BOLD}🎯 DEMO CHECKPOINT: Ransomware lateral movement isolated successfully via Cloud APIs.{RESET}\n")
-                    break
+                    confirm_event.clear()
+                    cancel_event.clear()
+                    with state_lock:
+                        state["status"] = "PENDING_CONFIRMATION"
+                        render_ui("PENDING_CONFIRMATION", target_asset, auth_token, ai_reasoning, state["logs"])
+                    
+                    # Prompt SRE operator in a terminal thread
+                    def prompt_terminal():
+                        print(f"\n{YELLOW}{BOLD}⚠️  [ACTION REQUIRED] AI has recommended network isolation (AIRGAP_NODE) for node '{target_asset}'.{RESET}")
+                        print(f"{YELLOW}Reasoning: {ai_reasoning}{RESET}")
+                        print(f"{WHITE}Confirm isolation? (y/n) [Default: y]: {RESET}", end="", flush=True)
+                        try:
+                            with open('/dev/tty', 'r') as tty:
+                                choice = tty.readline().strip().lower()
+                        except Exception:
+                            choice = input().strip().lower()
+                        
+                        if choice in ['n', 'no']:
+                            cancel_event.set()
+                        else:
+                            confirm_event.set()
+
+                    t_prompt = threading.Thread(target=prompt_terminal, daemon=True)
+                    t_prompt.start()
+                    
+                    # Wait for confirm or cancel from TTY or Web API
+                    while not confirm_event.is_set() and not cancel_event.is_set():
+                        time.sleep(0.1)
+                        
+                    if confirm_event.is_set():
+                        with state_lock:
+                            state["status"] = "AIRGAP_ACTIVE"
+                        execute_airgap(target_asset, action_token, auth_token, ai_reasoning)
+                        with state_lock:
+                            render_ui("AIRGAP_NODE", target_asset, auth_token, ai_reasoning, state["logs"])
+                        
+                        # Terminal restore check
+                        def prompt_restore():
+                            print(f"\n{RED}{BOLD}🚨 [AIRGAP ACTIVE] Node '{target_asset}' is isolated.{RESET}")
+                            print(f"{WHITE}Press [R] to trigger restore_network.sh and recover system, or [Q] to quit: {RESET}", end="", flush=True)
+                            try:
+                                with open('/dev/tty', 'r') as tty:
+                                    choice = tty.readline().strip().lower()
+                            except Exception:
+                                choice = input().strip().lower()
+                            
+                            if choice in ['r', 'restore']:
+                                execute_restore(target_asset)
+                            elif choice in ['q', 'quit']:
+                                sys.exit(0)
+
+                        t_res = threading.Thread(target=prompt_restore, daemon=True)
+                        t_res.start()
+                    else:
+                        with state_lock:
+                            state["status"] = "NOMINAL"
+                        log_warn("Airgap isolation cancelled by operator override.")
+                        with state_lock:
+                            render_ui("NOMINAL", target_asset, auth_token, ai_reasoning, state["logs"])
+                else:
+                    with state_lock:
+                        state["status"] = action_token
+                    execute_airgap(target_asset, action_token, auth_token, ai_reasoning)
+                    with state_lock:
+                        render_ui(action_token, target_asset, auth_token, ai_reasoning, state["logs"])
             else:
                 log_warn(f"Received unknown action code: {action_token}. No state mutation triggered.")
-                render_ui("NOMINAL", target_asset, auth_token, ai_reasoning, runtime_logs)
+                with state_lock:
+                    render_ui("NOMINAL", target_asset, auth_token, ai_reasoning, state["logs"])
                 
         except json.JSONDecodeError:
             log_err("Received malformed non-JSON data stream.")
-            render_ui("NOMINAL", "unknown-node", "", "", runtime_logs)
+            with state_lock:
+                render_ui("NOMINAL", "unknown-node", "", "", state["logs"])
             continue

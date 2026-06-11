@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RanSafe SRE Control Panel</title>
+    <!-- Fonts and Icons -->
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Outfit:wght@300;400;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="glass-bg"></div>
+    
+    <header>
+        <div class="logo-area">
+            <div id="status-pulse" class="pulse-indicator status-nominal"></div>
+            <h1>RanSafe <span class="subtitle">SRE Orchestrator</span></h1>
+        </div>
+        <div class="system-time" id="clock">00:00:00</div>
+    </header>
+
+    <main class="dashboard-grid">
+        <!-- System Status Summary -->
+        <section class="card status-card" id="status-panel">
+            <h2><i class="fa-solid fa-shield-halved"></i> System Status</h2>
+            <div class="status-display">
+                <div class="status-badge status-nominal" id="system-status-badge">NOMINAL</div>
+                <div class="status-desc" id="system-status-desc">Continuous metric evaluation active. VPC environment clean.</div>
+            </div>
+            <div class="metadata-grid">
+                <div class="meta-item">
+                    <span class="label">Target Node:</span>
+                    <span class="value" id="node-id">k8s-pod-node-dummy</span>
+                </div>
+                <div class="meta-item">
+                    <span class="label">Auth Token:</span>
+                    <span class="value" id="auth-token">N/A</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Live Metrics Gauges -->
+        <section class="card metrics-card">
+            <h2><i class="fa-solid fa-chart-line"></i> Real-time Telemetry</h2>
+            <div class="gauges-container">
+                <div class="gauge-box">
+                    <div class="gauge-circle" id="cpu-circle" style="--percent: 0;">
+                        <svg>
+                            <circle cx="60" cy="60" r="50"></circle>
+                            <circle cx="60" cy="60" r="50" class="progress"></circle>
+                        </svg>
+                        <div class="gauge-value"><span id="cpu-val">0</span>%</div>
+                    </div>
+                    <div class="gauge-label">CPU Load</div>
+                </div>
+
+                <div class="gauge-box">
+                    <div class="gauge-circle" id="writes-circle" style="--percent: 0;">
+                        <svg>
+                            <circle cx="60" cy="60" r="50"></circle>
+                            <circle cx="60" cy="60" r="50" class="progress"></circle>
+                        </svg>
+                        <div class="gauge-value" id="writes-val">0</div>
+                    </div>
+                    <div class="gauge-label">Write Ops/s</div>
+                </div>
+
+                <div class="gauge-box">
+                    <div class="gauge-circle" id="entropy-circle" style="--percent: 0;">
+                        <svg>
+                            <circle cx="60" cy="60" r="50"></circle>
+                            <circle cx="60" cy="60" r="50" class="progress"></circle>
+                        </svg>
+                        <div class="gauge-value" id="entropy-val">0.00</div>
+                    </div>
+                    <div class="gauge-label">Entropy Coeff</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Mitigations & Interventions -->
+        <section class="card mitigation-card">
+            <h2><i class="fa-solid fa-triangle-exclamation"></i> Emergency Containment Sequence</h2>
+            <div class="threat-alert hidden" id="threat-alert-box">
+                <div class="alert-header">
+                    <i class="fa-solid fa-skull-crossbones flashing"></i>
+                    <span>RANSOMWARE SIGNATURE MATCHED</span>
+                </div>
+                <p class="reasoning-text" id="reasoning-summary">AI Reasoning Summary</p>
+                <div class="action-buttons">
+                    <button class="btn btn-danger" id="btn-confirm" onclick="confirmAirgap()">
+                        <i class="fa-solid fa-lock"></i> CONFIRM AIRGAP
+                    </button>
+                    <button class="btn btn-secondary" id="btn-cancel" onclick="cancelAirgap()">
+                        <i class="fa-solid fa-xmark"></i> DEVIATE/CANCEL
+                    </button>
+                </div>
+            </div>
+
+            <!-- Steps list -->
+            <div class="steps-list" id="steps-container">
+                <div class="step-item" id="step-armor">
+                    <i class="fa-solid fa-circle-notch fa-spin step-icon"></i>
+                    <span>1. Cloud Armor IP Security Policy Mutation</span>
+                </div>
+                <div class="step-item" id="step-vpc">
+                    <i class="fa-solid fa-circle-notch fa-spin step-icon"></i>
+                    <span>2. VPC Network Firewall Mutation</span>
+                </div>
+                <div class="step-item" id="step-iam">
+                    <i class="fa-solid fa-circle-notch fa-spin step-icon"></i>
+                    <span>3. GCP Service Account IAM Revocation</span>
+                </div>
+                <div class="step-item" id="step-gke-kill">
+                    <i class="fa-solid fa-circle-notch fa-spin step-icon"></i>
+                    <span>4. GKE Compromised Pod Eviction</span>
+                </div>
+                <div class="step-item" id="step-gke-roll">
+                    <i class="fa-solid fa-circle-notch fa-spin step-icon"></i>
+                    <span>5. GKE Healthy Replica Workload Rollout</span>
+                </div>
+            </div>
+
+            <div class="restore-panel hidden" id="restore-panel-box">
+                <button class="btn btn-success" id="btn-restore" onclick="triggerRestore()">
+                    <i class="fa-solid fa-rotate-left"></i> RESTORE NETWORK & RESET INFRASTRUCTURE
+                </button>
+            </div>
+        </section>
+
+        <!-- Live Terminal Stream -->
+        <section class="card logs-card">
+            <h2><i class="fa-solid fa-terminal"></i> Live SRE Log Pipeline</h2>
+            <div class="console-box" id="console-output">
+                <div class="log-line log-info">[INFO] Connecting to RanSafe SSE Endpoint...</div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>RanSafe Security Circuit Breaker • Apache License 2.0 • Google Cloud Rapid Agent Hackathon</p>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>
