@@ -5,6 +5,45 @@ import os
 import sys
 import jsonschema
 
+# Try importing OpenTelemetry, failing gracefully if package is missing
+try:
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from opentelemetry.sdk.resources import Resource
+    HAS_OTEL = True
+except ImportError:
+    HAS_OTEL = False
+
+# Initialize the Tracer dynamically
+tracer = None
+if HAS_OTEL:
+    try:
+        # Define resource name
+        resource = Resource(attributes={"service.name": "ransafe-ai-validator"})
+        provider = TracerProvider(resource=resource)
+        
+        # Load keys from environment (which can be populated via .env file)
+        dt_url = os.environ.get("DYNATRACE_ENV_URL")
+        dt_token = os.environ.get("DYNATRACE_API_TOKEN")
+        
+        if dt_url and dt_token:
+            # Point to Dynatrace OTLP traces ingest v2 endpoint
+            exporter = OTLPSpanExporter(
+                endpoint=f"{dt_url.rstrip('/')}/api/v2/otlp/v1/traces",
+                headers={"Authorization": f"Api-Token {dt_token}"}
+            )
+        else:
+            exporter = ConsoleSpanExporter()
+            
+        provider.add_span_processor(BatchSpanProcessor(exporter))
+        trace.set_tracer_provider(provider)
+        tracer = trace.get_tracer("ransafe_tracer")
+    except Exception as e:
+        print(f"[WARNING] OTel initialization failed: {e}", file=sys.stderr)
+        tracer = None
+
 # Schema and Prompt Paths
 TELEMETRY_SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "../docs/telemetry_schema.json")
 EXECUTION_SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "../docs/execution_interface.json")
@@ -44,7 +83,8 @@ def run_local_rule_engine(telemetry_payload):
 
 def run_gemini_inference(system_prompt, telemetry_payload):
     """
-    Calls the live Gemini 3 (gemini-2.5-flash) API using the google-genai SDK.
+    Calls the live Gemini 3 (gemini-2.5-flash) API using the google-genai SDK,
+    wrapping the model invocation in an active OpenTelemetry trace span.
     """
     try:
         from google import genai
@@ -53,12 +93,19 @@ def run_gemini_inference(system_prompt, telemetry_payload):
         print("[ERROR] google-genai package is not installed.", file=sys.stderr)
         return None
 
-    # genai.Client picks up GEMINI_API_KEY automatically from environment
     client = genai.Client()
-    
-    # We serialize the individual telemetry payload to JSON text for model ingestion
     input_content = json.dumps(telemetry_payload, indent=2)
-    
+
+    # Initialize trace span context if OTel is active
+    span = None
+    if tracer:
+        try:
+            span = tracer.start_span("gemini_threat_evaluation")
+            span.set_attribute("genai.model", "gemini-2.5-flash")
+            span.set_attribute("genai.prompt", input_content)
+        except Exception:
+            pass
+
     try:
         response = client.models.generate_content(
             model="gemini-2.5-flash",
@@ -69,20 +116,35 @@ def run_gemini_inference(system_prompt, telemetry_payload):
             )
         )
         
-        # Clean up any potential markdown wrap if Gemini failed to strictly follow instructions
         text_resp = response.text.strip()
         if text_resp.startswith("```"):
-            # strip off ```json and ```
             lines = text_resp.split("\n")
             if lines[0].startswith("```"):
                 lines = lines[1:]
             if lines[-1].startswith("```"):
                 lines = lines[:-1]
             text_resp = "\n".join(lines).strip()
+
+        # Successfully end span and set status
+        if span:
+            try:
+                span.set_attribute("genai.response", text_resp)
+                span.set_status(trace.Status(trace.StatusCode.OK))
+                span.end()
+            except Exception:
+                pass
             
         return json.loads(text_resp)
         
     except Exception as e:
+        # Record exceptions to the span before failing
+        if span:
+            try:
+                span.record_exception(e)
+                span.set_status(trace.Status(trace.StatusCode.ERROR, str(e)))
+                span.end()
+            except Exception:
+                pass
         print(f"[ERROR] Live Gemini API call failed: {e}", file=sys.stderr)
         return None
 
