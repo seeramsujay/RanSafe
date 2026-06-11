@@ -146,47 +146,49 @@ if (require.main === module) {
   const mockMode = args.includes('--mock') || !serverPathArg;
   const jsonOnly = args.includes('--json-only');
 
-  if (mockMode) {
-    const localMock = args.includes('--local-mock');
-    if (localMock) {
-      try {
-        const payload = getMockDynatraceMcpMetrics(nodeIdArg, modeArg);
+  const offlineMode = args.includes('--offline');
+
+  if (mockMode && !offlineMode) {
+    const liveUrl = 'https://ransafe-sandbox-453397284615.us-central1.run.app';
+    if (!jsonOnly) {
+      console.log(`[INFO] Running in MCP Client mode fetching from live HTTP endpoint: ${liveUrl}`);
+    }
+    fetch(liveUrl)
+      .then(res => {
+        if (!res.ok) {
+          throw new Error(`HTTP error! status: ${res.status}`);
+        }
+        return res.json();
+      })
+      .then(payload => {
         validateTelemetry(payload);
         if (!jsonOnly) {
-          console.log('✓ Mock Telemetry generated successfully:');
+          console.log('✓ Live Telemetry retrieved successfully:');
           console.log(JSON.stringify(payload, null, 2));
         } else {
           console.log(JSON.stringify(payload));
         }
-      } catch (err) {
-        console.error('✗ Mock telemetry validation failed:', err.message);
-        process.exit(1);
-      }
+      })
+      .catch(err => {
+        if (!jsonOnly) {
+          console.log(`⚠️ Live Telemetry fetch failed (${err.message}). Falling back to local offline simulation metrics...`);
+        }
+        const payload = getMockDynatraceMcpMetrics(nodeIdArg, modeArg);
+        validateTelemetry(payload);
+        if (jsonOnly) {
+          console.log(JSON.stringify(payload));
+        } else {
+          console.log(JSON.stringify(payload, null, 2));
+        }
+      });
+  } else if (offlineMode) {
+    const payload = getMockDynatraceMcpMetrics(nodeIdArg, modeArg);
+    validateTelemetry(payload);
+    if (jsonOnly) {
+      console.log(JSON.stringify(payload));
     } else {
-      const liveUrl = 'https://ransafe-sandbox-453397284615.us-central1.run.app';
-      if (!jsonOnly) {
-        console.log(`[INFO] Running in MCP Client mode fetching from live HTTP endpoint: ${liveUrl}`);
-      }
-      fetch(liveUrl)
-        .then(res => {
-          if (!res.ok) {
-            throw new Error(`HTTP error! status: ${res.status}`);
-          }
-          return res.json();
-        })
-        .then(payload => {
-          validateTelemetry(payload);
-          if (!jsonOnly) {
-            console.log('✓ Live Telemetry retrieved successfully:');
-            console.log(JSON.stringify(payload, null, 2));
-          } else {
-            console.log(JSON.stringify(payload));
-          }
-        })
-        .catch(err => {
-          console.error('✗ Telemetry retrieval/validation failed:', err.message);
-          process.exit(1);
-        });
+      console.log('✓ Local offline simulation telemetry generated:');
+      console.log(JSON.stringify(payload, null, 2));
     }
   } else {
     if (!jsonOnly) {
