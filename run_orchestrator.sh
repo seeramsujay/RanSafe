@@ -42,6 +42,12 @@ done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Load local .env file if present
+if [ -f "${SCRIPT_DIR}/.env" ]; then
+    echo "[INFO] Loading local environment variables from .env"
+    export $(grep -v '^#' "${SCRIPT_DIR}/.env" | xargs)
+fi
+
 # Run pipeline execution
 echo "=========================================================="
 echo "🛡️  RanSafe Continuous Pipeline Orchestration Starting..."
