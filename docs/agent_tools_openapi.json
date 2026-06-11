@@ -1,0 +1,162 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "RanSafe Agent Tools API",
+    "version": "1.0.0",
+    "description": "API tools utilized by the RanSafe-Core SRE Orchestrator to monitor infrastructure metrics and dispatch mitigation actions."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080",
+      "description": "Local RanSafe Execution Gateway and Daemon"
+    }
+  ],
+  "paths": {
+    "/api/telemetry/{node_id}": {
+      "get": {
+        "summary": "Retrieve telemetry metrics for a target compute node",
+        "description": "Queries the Dynatrace observability server to fetch high-frequency CPU, write operation, and entropy metrics for a node.",
+        "operationId": "get_telemetry_metrics",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "required": true,
+            "description": "The unique identifier of the target node",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful retrieval of node telemetry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RanSafeTelemetryPayload"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Node not found"
+          }
+        }
+      }
+    },
+    "/api/mitigation": {
+      "post": {
+        "summary": "Execute SRE mitigation or scaling action",
+        "description": "Dispatches an active containment or resource allocation command targeting the specified node.",
+        "operationId": "execute_mitigation_action",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RanSafeExecutionPayload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Mitigation request accepted and executed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "success"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Airgap action confirmed"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload format or failed schema verification"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "RanSafeTelemetryPayload": {
+        "type": "object",
+        "required": [
+          "node_id",
+          "metrics",
+          "timestamp"
+        ],
+        "properties": {
+          "node_id": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "metrics": {
+            "type": "object",
+            "required": [
+              "cpu_utilization_percentage",
+              "filesystem_write_ops_per_sec",
+              "entropy_coefficient"
+            ],
+            "properties": {
+              "cpu_utilization_percentage": {
+                "type": "number",
+                "description": "CPU utilization percentage (0.0 to 100.0)"
+              },
+              "filesystem_write_ops_per_sec": {
+                "type": "integer",
+                "description": "Number of filesystem write operations per second"
+              },
+              "entropy_coefficient": {
+                "type": "number",
+                "description": "Data write entropy coefficient representing encryption behavior (0.0 to 1.0)"
+              }
+            }
+          }
+        }
+      },
+      "RanSafeExecutionPayload": {
+        "type": "object",
+        "required": [
+          "action",
+          "target_node_id",
+          "authorization_token",
+          "reasoning_summary"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "AIRGAP_NODE",
+              "REALLOCATE_RESOURCES",
+              "MONITOR_INTENSE"
+            ]
+          },
+          "target_node_id": {
+            "type": "string"
+          },
+          "authorization_token": {
+            "type": "string"
+          },
+          "reasoning_summary": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
