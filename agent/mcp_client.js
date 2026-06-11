@@ -147,30 +147,47 @@ if (require.main === module) {
   const jsonOnly = args.includes('--json-only');
 
   if (mockMode) {
-    const liveUrl = 'https://ransafe-sandbox-453397284615.us-central1.run.app';
-    if (!jsonOnly) {
-      console.log(`[INFO] Running in MCP Client mode fetching from live HTTP endpoint: ${liveUrl}`);
-    }
-    fetch(liveUrl)
-      .then(res => {
-        if (!res.ok) {
-          throw new Error(`HTTP error! status: ${res.status}`);
-        }
-        return res.json();
-      })
-      .then(payload => {
+    const localMock = args.includes('--local-mock');
+    if (localMock) {
+      try {
+        const payload = getMockDynatraceMcpMetrics(nodeIdArg, modeArg);
         validateTelemetry(payload);
         if (!jsonOnly) {
-          console.log('✓ Live Telemetry retrieved successfully:');
+          console.log('✓ Mock Telemetry generated successfully:');
           console.log(JSON.stringify(payload, null, 2));
         } else {
           console.log(JSON.stringify(payload));
         }
-      })
-      .catch(err => {
-        console.error('✗ Telemetry retrieval/validation failed:', err.message);
+      } catch (err) {
+        console.error('✗ Mock telemetry validation failed:', err.message);
         process.exit(1);
-      });
+      }
+    } else {
+      const liveUrl = 'https://ransafe-sandbox-453397284615.us-central1.run.app';
+      if (!jsonOnly) {
+        console.log(`[INFO] Running in MCP Client mode fetching from live HTTP endpoint: ${liveUrl}`);
+      }
+      fetch(liveUrl)
+        .then(res => {
+          if (!res.ok) {
+            throw new Error(`HTTP error! status: ${res.status}`);
+          }
+          return res.json();
+        })
+        .then(payload => {
+          validateTelemetry(payload);
+          if (!jsonOnly) {
+            console.log('✓ Live Telemetry retrieved successfully:');
+            console.log(JSON.stringify(payload, null, 2));
+          } else {
+            console.log(JSON.stringify(payload));
+          }
+        })
+        .catch(err => {
+          console.error('✗ Telemetry retrieval/validation failed:', err.message);
+          process.exit(1);
+        });
+    }
   } else {
     if (!jsonOnly) {
       console.log(`[INFO] Connecting to Dynatrace MCP Server: ${serverPathArg}`);

@@ -9,6 +9,7 @@ set -euo pipefail
 MODE="ransomware"
 NODE_ID="node-us-east-412"
 LOOP=false
+LOCAL_MOCK=false
 
 # Usage help
 show_help() {
@@ -17,6 +18,7 @@ show_help() {
     echo "  --mode <normal|reallocate|ransomware>   Telemetry scenario mode (Default: ransomware)"
     echo "  --node-id <id>                          Target compute node ID (Default: node-us-east-412)"
     echo "  --loop, -l                              Run continuously in a loop (Default: false)"
+    echo "  --local-mock, -m                        Use locally generated mock telemetry instead of fetching from cloud run (Default: false)"
     echo "  -h, --help                              Show this help menu"
     exit 0
 }
@@ -34,6 +36,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --loop|-l)
             LOOP=true
+            shift 1
+            ;;
+        --local-mock|-m)
+            LOCAL_MOCK=true
             shift 1
             ;;
         -h|--help)
@@ -60,19 +66,26 @@ echo "🛡️  RanSafe Continuous Pipeline Orchestration Starting..."
 echo "Mode: ${MODE}"
 echo "Node ID: ${NODE_ID}"
 echo "Loop: ${LOOP}"
+echo "Local Mock: ${LOCAL_MOCK}"
 echo "=========================================================="
+
+# Determine if --local-mock argument needs to be passed
+CLIENT_FLAGS="--mock --mode=${MODE} --node-id=${NODE_ID} --json-only"
+if [ "$LOCAL_MOCK" = true ]; then
+    CLIENT_FLAGS="${CLIENT_FLAGS} --local-mock"
+fi
 
 if [ "$LOOP" = true ]; then
     (
         while true; do
-            node "${SCRIPT_DIR}/agent/mcp_client.js" --mock --mode="${MODE}" --node-id="${NODE_ID}" --json-only
+            node "${SCRIPT_DIR}/agent/mcp_client.js" ${CLIENT_FLAGS}
             sleep 5
         done
     ) | \
     python3 -u "${SCRIPT_DIR}/agent/validator.py" --prompt "${SCRIPT_DIR}/agent/system_prompt.txt" --input - --json-only | \
     python3 -u "${SCRIPT_DIR}/execution/handler.py"
 else
-    node "${SCRIPT_DIR}/agent/mcp_client.js" --mock --mode="${MODE}" --node-id="${NODE_ID}" --json-only | \
+    node "${SCRIPT_DIR}/agent/mcp_client.js" ${CLIENT_FLAGS} | \
     python3 -u "${SCRIPT_DIR}/agent/validator.py" --prompt "${SCRIPT_DIR}/agent/system_prompt.txt" --input - --json-only | \
     python3 -u "${SCRIPT_DIR}/execution/handler.py"
 fi
