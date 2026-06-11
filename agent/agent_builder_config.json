@@ -1,0 +1,50 @@
+{
+  "agent_name": "RanSafe-Core-Orchestrator",
+  "description": "Autonomous cybersecurity SRE orchestrator that evaluates Dynatrace telemetry and executes airgap containment for ransomware threats.",
+  "engine_settings": {
+    "model": "gemini-2.5-flash",
+    "temperature": 0.0,
+    "top_p": 0.95,
+    "top_k": 40,
+    "system_instruction_path": "agent/system_prompt.txt"
+  },
+  "grounding_and_context": {
+    "workspace_scope": "RanSafe-SRE-Cluster",
+    "data_contracts": {
+      "input_schema": "docs/telemetry_schema.json",
+      "output_schema": "docs/execution_interface.json"
+    }
+  },
+  "tools": [
+    {
+      "name": "DynatraceTelemetryReader",
+      "type": "openapi",
+      "openapi_spec_path": "docs/agent_tools_openapi.json",
+      "endpoint": "get_telemetry_metrics"
+    },
+    {
+      "name": "RanSafeMitigationExecutor",
+      "type": "openapi",
+      "openapi_spec_path": "docs/agent_tools_openapi.json",
+      "endpoint": "execute_mitigation_action"
+    }
+  ],
+  "safety_settings": [
+    {
+      "category": "HARM_CATEGORY_HATE_SPEECH",
+      "threshold": "BLOCK_LOW_AND_ABOVE"
+    },
+    {
+      "category": "HARM_CATEGORY_HARASSMENT",
+      "threshold": "BLOCK_LOW_AND_ABOVE"
+    },
+    {
+      "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+      "threshold": "BLOCK_LOW_AND_ABOVE"
+    },
+    {
+      "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+      "threshold": "BLOCK_NONE"
+    }
+  ]
+}

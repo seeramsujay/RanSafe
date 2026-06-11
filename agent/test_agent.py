@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import unittest
+import unittest.mock
 import json
 import os
 import sys
@@ -8,7 +9,7 @@ import jsonschema
 # Add parent directory to path to import agent modules if necessary
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agent.validator import run_local_rule_engine, TELEMETRY_SCHEMA_PATH, EXECUTION_SCHEMA_PATH, load_json
+from agent.validator import run_local_rule_engine, run_gemini_inference, TELEMETRY_SCHEMA_PATH, EXECUTION_SCHEMA_PATH, load_json
 from agent.mock_generator import generate_metrics
 
 class TestRanSafeAgent(unittest.TestCase):
@@ -112,6 +113,88 @@ class TestRanSafeAgent(unittest.TestCase):
         # Verify schema
         jsonschema.validate(instance=result, schema=self.execution_schema)
         self.assertEqual(result["action"], "MONITOR_INTENSE")
+
+    @unittest.mock.patch('google.genai.Client')
+    def test_run_gemini_inference_success(self, mock_client_class):
+        # Setup mock client and response
+        mock_client = mock_client_class.return_value
+        mock_response = unittest.mock.MagicMock()
+        mock_response.text = json.dumps({
+            "action": "AIRGAP_NODE",
+            "target_node_id": "node-123",
+            "authorization_token": "AUTH-TOKEN-node-123-AIRGAP_NODE",
+            "reasoning_summary": "Ransomware matched CPU and entropy rules."
+        })
+        mock_client.models.generate_content.return_value = mock_response
+
+        telemetry = {
+            "node_id": "node-123",
+            "timestamp": "2026-06-11T12:00:00Z",
+            "metrics": {
+                "cpu_utilization_percentage": 90.0,
+                "filesystem_write_ops_per_sec": 300,
+                "entropy_coefficient": 0.85
+            }
+        }
+
+        result = run_gemini_inference("mock_system_prompt", telemetry)
+        
+        # Assertions
+        self.assertIsNotNone(result)
+        self.assertEqual(result["action"], "AIRGAP_NODE")
+        self.assertEqual(result["target_node_id"], "node-123")
+        self.assertEqual(result["authorization_token"], "AUTH-TOKEN-node-123-AIRGAP_NODE")
+        
+        # Verify schema validation
+        jsonschema.validate(instance=result, schema=self.execution_schema)
+
+    @unittest.mock.patch('google.genai.Client')
+    def test_run_gemini_inference_markdown_cleanup(self, mock_client_class):
+        mock_client = mock_client_class.return_value
+        mock_response = unittest.mock.MagicMock()
+        # Mock markdown wrapped JSON output
+        mock_response.text = "```json\n{\n  \"action\": \"REALLOCATE_RESOURCES\",\n  \"target_node_id\": \"node-123\",\n  \"authorization_token\": \"AUTH-TOKEN-node-123-REALLOCATE_RESOURCES\",\n  \"reasoning_summary\": \"High CPU normal entropy\"\n}\n```"
+        mock_client.models.generate_content.return_value = mock_response
+
+        telemetry = {
+            "node_id": "node-123",
+            "timestamp": "2026-06-11T12:00:00Z",
+            "metrics": {
+                "cpu_utilization_percentage": 80.0,
+                "filesystem_write_ops_per_sec": 20,
+                "entropy_coefficient": 0.15
+            }
+        }
+
+        result = run_gemini_inference("mock_system_prompt", telemetry)
+        
+        # Check parsing succeeded despite markdown wrapping
+        self.assertIsNotNone(result)
+        self.assertEqual(result["action"], "REALLOCATE_RESOURCES")
+        self.assertEqual(result["target_node_id"], "node-123")
+        
+        # Verify schema validation
+        jsonschema.validate(instance=result, schema=self.execution_schema)
+
+    @unittest.mock.patch('google.genai.Client')
+    def test_run_gemini_inference_failure(self, mock_client_class):
+        mock_client = mock_client_class.return_value
+        # Force generate_content to raise an exception
+        mock_client.models.generate_content.side_effect = Exception("API connection timed out")
+
+        telemetry = {
+            "node_id": "node-123",
+            "timestamp": "2026-06-11T12:00:00Z",
+            "metrics": {
+                "cpu_utilization_percentage": 90.0,
+                "filesystem_write_ops_per_sec": 300,
+                "entropy_coefficient": 0.85
+            }
+        }
+
+        # Should handle exception and return None
+        result = run_gemini_inference("mock_system_prompt", telemetry)
+        self.assertIsNone(result)
 
 if __name__ == "__main__":
     unittest.main()
