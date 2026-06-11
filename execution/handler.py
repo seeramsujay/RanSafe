@@ -10,7 +10,20 @@ import http.server
 import socketserver
 import re
 
-# ANSI Colors
+# Try to import Rich library for advanced TUI
+try:
+    import rich
+    from rich.live import Live
+    from rich.layout import Layout
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+    from rich.console import Console
+    HAS_RICH = True
+except ImportError:
+    HAS_RICH = False
+
+# ANSI Colors (Fallback)
 RESET = "\033[0m"
 BOLD = "\033[1m"
 ITALIC = "\033[3m"
@@ -56,35 +69,233 @@ cancel_event = threading.Event()
 
 PORT = 8080
 
+# Live TUI Controller
+live_display = None
+live_started = False
+
+def start_live_display():
+    global live_started
+    if HAS_RICH and live_display and not live_started:
+        try:
+            live_display.start()
+            live_started = True
+        except Exception:
+            pass
+
+def stop_live_display():
+    global live_started
+    if HAS_RICH and live_display and live_started:
+        try:
+            live_display.stop()
+            live_started = False
+        except Exception:
+            pass
+
+def get_circular_gauge(percent):
+    """Returns a quadrant circle unicode character based on progress."""
+    if percent < 12.5:
+        return "○"
+    elif percent < 37.5:
+        return "◔"
+    elif percent < 62.5:
+        return "◑"
+    elif percent < 87.5:
+        return "◕"
+    else:
+        return "●"
+
+def make_circular_gauge_str(value, max_val, color):
+    """Draws a compact circular representation next to a colored horizontal block bar."""
+    pct = min(int((value / max_val) * 100), 100)
+    gauge_char = get_circular_gauge(pct)
+    filled_bars = int(pct / 10)
+    bar = "▰" * filled_bars + "▱" * (10 - filled_bars)
+    return f"[{color}]{gauge_char} {bar}[/{color}] {pct}%"
+
+def make_layout():
+    """Generates the Rich TUI layout dynamically from global state."""
+    layout = Layout()
+    
+    # Split into header, body, footer
+    layout.split(
+        Layout(name="header", size=3),
+        Layout(name="body", ratio=1),
+        Layout(name="footer", size=8)
+    )
+    
+    # Split body into left and right panels
+    layout["body"].split_row(
+        Layout(name="left_panel", ratio=1),
+        Layout(name="right_panel", ratio=1)
+    )
+    
+    # Header Panel
+    title_text = Text("🛡️  RANSAFE SRE ORCHESTRATOR — ACTIVE CONTAINMENT ENGINE", style="bold cyan", justify="center")
+    layout["header"].update(Panel(title_text, border_style="cyan"))
+    
+    # Left Panel: System Status & Telemetry
+    status_table = Table.grid(expand=True)
+    status_table.add_column(style="bold white", width=18)
+    status_table.add_column()
+    
+    status_val = state["status"]
+    if status_val == "NOMINAL":
+        status_styled = "[bold green]NOMINAL[/bold green]"
+    elif status_val == "PENDING_CONFIRMATION":
+        status_styled = "[bold yellow flashing]PENDING CONFIRMATION[/bold yellow flashing]"
+    elif status_val == "AIRGAP_ACTIVE" or status_val == "AIRGAP_NODE":
+        status_styled = "[bold red flashing]AIRGAP ACTIVE[/bold red flashing]"
+    elif status_val == "MONITOR_INTENSE":
+        status_styled = "[bold yellow]MONITOR INTENSE[/bold yellow]"
+    elif status_val == "REALLOCATE_RESOURCES":
+        status_styled = "[bold green]SCALING ACTIVE[/bold green]"
+    else:
+        status_styled = f"[bold yellow]{status_val}[/bold yellow]"
+        
+    status_table.add_row("System Status:", status_styled)
+    status_table.add_row("Target Node:", f"[yellow]{state['target_node_id']}[/yellow]")
+    status_table.add_row("Auth Token:", f"[magenta]{state['authorization_token'] if state['authorization_token'] else 'N/A'}[/magenta]")
+    
+    metrics_table = Table.grid(expand=True)
+    metrics_table.add_column(style="bold white", width=18)
+    metrics_table.add_column()
+    
+    cpu = state["metrics"]["cpu_utilization_percentage"]
+    writes = state["metrics"]["filesystem_write_ops_per_sec"]
+    entropy = state["metrics"]["entropy_coefficient"]
+    
+    metrics_table.add_row("CPU Load:", make_circular_gauge_str(cpu, 100, "green" if cpu < 70 else "yellow" if cpu < 85 else "red"))
+    metrics_table.add_row("Write Ops/s:", make_circular_gauge_str(writes, 1000, "green" if writes < 150 else "yellow" if writes < 300 else "red"))
+    metrics_table.add_row("Entropy Coeff:", make_circular_gauge_str(entropy * 100, 100, "green" if entropy < 0.5 else "yellow" if entropy < 0.8 else "red"))
+    
+    left_grid = Table.grid(expand=True)
+    left_grid.add_row(Panel(status_table, title="System Status Grid", border_style="cyan"))
+    left_grid.add_row(Panel(metrics_table, title="Telemetry Metric Gauges", border_style="cyan"))
+    layout["left_panel"].update(left_grid)
+    
+    # Right Panel: Containment Checklist & AI Reasoning
+    steps_table = Table.grid(expand=True)
+    steps_table.add_column(width=4)
+    steps_table.add_column()
+    
+    logs_str = "\n".join(state["logs"])
+    steps_list = [
+        ("Cloud Armor IP Policy", ["CLOUD ARMOR", "security-policies"]),
+        ("VPC Firewall Block", ["VPC FIREWALL", "firewall-rules"]),
+        ("GCP IAM SA Revocation", ["GCP IAM", "remove-iam-policy-binding"]),
+        ("GKE Compromised Pod Eviction", ["GKE CONTAINER OPS", "delete pod"]),
+        ("GKE Replica Workload Rollout", ["GKE REPLICATOR", "rollout restart"])
+    ]
+    
+    for label, keywords in steps_list:
+        matched = False
+        success = False
+        error = False
+        for kw in keywords:
+            if kw in logs_str:
+                matched = True
+                if any(x in logs_str for x in ["Success", "✅", "successfully", "started"]):
+                    success = True
+                elif "ERROR" in logs_str or "❌" in logs_str:
+                    error = True
+        
+        if success:
+            icon = "[bold green]✓[/bold green]"
+            item_label = f"[green]{label}[/green]"
+        elif error:
+            icon = "[bold red]✗[/bold red]"
+            item_label = f"[red]{label}[/red]"
+        elif matched:
+            icon = "[bold yellow]⏳[/bold yellow]"
+            item_label = f"[yellow]{label}[/yellow]"
+        else:
+            icon = "[white]○[/white]"
+            item_label = f"[dim white]{label}[/dim white]"
+            
+        steps_table.add_row(icon, item_label)
+        
+    reasoning_panel = Panel(
+        Text(state["reasoning_summary"] if state["reasoning_summary"] else "Continuous observation active. Monitoring workloads.", style="italic white"),
+        title="AI Reasoning Summary",
+        border_style="cyan"
+    )
+    
+    right_grid = Table.grid(expand=True)
+    right_grid.add_row(Panel(steps_table, title="Emergency Containment Steps", border_style="cyan"))
+    right_grid.add_row(reasoning_panel)
+    layout["right_panel"].update(right_grid)
+    
+    # Footer Panel: Console Logs
+    log_text = Text()
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    
+    for log in state["logs"][-5:]: # Show last 5 logs
+        clean_log = ansi_escape.sub('', log)
+        if "[INFO]" in clean_log:
+            log_text.append(clean_log + "\n", style="blue")
+        elif "[WARN]" in clean_log:
+            log_text.append(clean_log + "\n", style="yellow")
+        elif "[ERROR]" in clean_log:
+            log_text.append(clean_log + "\n", style="red")
+        elif "[SUCCESS]" in clean_log:
+            log_text.append(clean_log + "\n", style="green")
+        else:
+            log_text.append(clean_log + "\n", style="white")
+            
+    layout["footer"].update(Panel(log_text, title="Live Execution Logs", border_style="cyan"))
+    
+    return layout
+
+def update_tui(action=None, target=None, token=None, reasoning=None):
+    """Triggers a TUI refresh, falling back to ANSI if Rich is not imported."""
+    if HAS_RICH and live_display and live_started:
+        try:
+            live_display.update(make_layout())
+        except Exception:
+            pass
+    else:
+        # Fallback to custom ANSI renderer
+        with state_lock:
+            render_ui(
+                action if action else state["status"], 
+                target if target else state["target_node_id"], 
+                token if token else state["authorization_token"], 
+                reasoning if reasoning else state["reasoning_summary"], 
+                state["logs"]
+            )
+
 def log_info(msg):
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
     with state_lock:
         state["logs"].append(f"{BLUE}[{timestamp}] [INFO] {msg}{RESET}")
+    update_tui()
 
 def log_warn(msg):
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
     with state_lock:
         state["logs"].append(f"{YELLOW}[{timestamp}] [WARN] {msg}{RESET}")
+    update_tui()
 
 def log_err(msg):
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
     with state_lock:
         state["logs"].append(f"{RED}[{timestamp}] [ERROR] {msg}{RESET}")
+    update_tui()
 
 def log_success(msg):
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
     with state_lock:
         state["logs"].append(f"{GREEN}[{timestamp}] [SUCCESS] {msg}{RESET}")
+    update_tui()
 
 def render_ui(action, target, token="", reasoning="", logs=[]):
-    """Clears screen and draws a high-fidelity, colored cybersecurity console."""
+    """Clears screen and draws a high-fidelity, colored fallback console."""
     os.system('clear' if os.name == 'posix' else 'cls')
     print(BANNER)
     print(f"{CYAN}{BOLD}=" * 80 + f"{RESET}")
     print(f" {WHITE}{BOLD}🛡️  RANSAFE SRE ORCHESTRATOR — ACTIVE CONTAINMENT ENGINE  🛡️{RESET}")
     print(f"{CYAN}=" * 80 + f"{RESET}")
     
-    # Format labels
     module = f"{BLUE}execution/handler.py (Core Engine){RESET}"
     monitored_node = f"{YELLOW}{target}{RESET}"
     auth_token = f"{MAGENTA}{token if token else 'N/A'}{RESET}"
@@ -125,7 +336,7 @@ def render_ui(action, target, token="", reasoning="", logs=[]):
         
     print(f" {BOLD}📜 LIVE EXECUTION LOG PIPELINE:{RESET}")
     if logs:
-        for log in logs[-8:]: # Show last 8 logs
+        for log in logs[-8:]:
             print(f"  {log}")
     else:
         print(f"  {BLUE}[INFO] Pipeline active. Awaiting autonomous evaluation matrix...{RESET}")
@@ -148,7 +359,6 @@ def execute_airgap(target_asset, action_token, auth_token, ai_reasoning):
         text=True
     )
     
-    # Process script output into logs
     for outline in proc.stdout.splitlines():
         if outline.strip():
             if "Success" in outline or "verified" in outline or "✅" in outline:
@@ -205,13 +415,12 @@ def execute_restore(target_asset):
         log_success(f"Network recovery completed for {target_asset}")
         with state_lock:
             state["status"] = "NOMINAL"
-            render_ui("NOMINAL", target_asset, "", "", state["logs"])
+        update_tui()
     else:
         log_err(f"Restore script exited with error code {proc.returncode}")
 
 class RanSafeWebServer(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
-        # Override to suppress HTTP logging in terminal
         pass
 
     def do_GET(self):
@@ -312,14 +521,12 @@ def start_web_server():
         httpd.serve_forever()
 
 if __name__ == "__main__":
-    # Check for jsonschema availability
     try:
         import jsonschema
         HAS_JSONSCHEMA = True
     except ImportError:
         HAS_JSONSCHEMA = False
 
-    # Load schemas
     try:
         with open(EXECUTION_SCHEMA_PATH, "r") as f:
             EXECUTION_SCHEMA = json.load(f)
@@ -327,17 +534,19 @@ if __name__ == "__main__":
         EXECUTION_SCHEMA = None
         log_warn(f"Could not load execution interface schema: {e}")
 
-    # Render baseline monitoring view
+    # Initialize Live TUI
+    if HAS_RICH:
+        console = Console()
+        live_display = Live(make_layout(), console=console, screen=True, auto_refresh=True, refresh_per_second=4)
+
     log_info("RanSafe Execution Orchestrator Daemon initialized.")
     
-    # Start web server thread
     web_thread = threading.Thread(target=start_web_server, daemon=True)
     web_thread.start()
     
-    with state_lock:
-        render_ui("NOMINAL", state["target_node_id"], "", "", state["logs"])
+    start_live_display()
+    update_tui()
 
-    # Stream payload records from standard input
     for line in sys.stdin:
         if not line.strip():
             continue
@@ -351,17 +560,14 @@ if __name__ == "__main__":
                     log_success("Payload successfully validated against execution_interface.json schema.")
                 except jsonschema.exceptions.ValidationError as ve:
                     log_err(f"Schema Validation Failed: {ve.message}")
-                    with state_lock:
-                        render_ui("NOMINAL", "unknown-node", "", "", state["logs"])
+                    update_tui("NOMINAL", "unknown-node")
                     continue
             else:
-                # Basic validation fallback
                 required = ["action", "target_node_id", "authorization_token", "reasoning_summary"]
                 missing = [f for f in required if f not in payload]
                 if missing:
                     log_err(f"Payload missing required fields: {missing}")
-                    with state_lock:
-                        render_ui("NOMINAL", "unknown-node", "", "", state["logs"])
+                    update_tui("NOMINAL", "unknown-node")
                     continue
 
             action_token = payload.get("action")
@@ -380,15 +586,20 @@ if __name__ == "__main__":
                 state["reasoning_summary"] = ai_reasoning
                 state["metrics"] = metrics
             
+            update_tui()
+            
             if action_token in ["AIRGAP_NODE", "REALLOCATE_RESOURCES", "MONITOR_INTENSE"]:
                 if action_token == "AIRGAP_NODE":
                     confirm_event.clear()
                     cancel_event.clear()
+                    
                     with state_lock:
                         state["status"] = "PENDING_CONFIRMATION"
-                        render_ui("PENDING_CONFIRMATION", target_asset, auth_token, ai_reasoning, state["logs"])
+                    update_tui()
                     
-                    # Prompt SRE operator in a terminal thread
+                    # Stop TUI to prompt on TTY
+                    stop_live_display()
+                    
                     def prompt_terminal():
                         print(f"\n{YELLOW}{BOLD}⚠️  [ACTION REQUIRED] AI has recommended network isolation (AIRGAP_NODE) for node '{target_asset}'.{RESET}")
                         print(f"{YELLOW}Reasoning: {ai_reasoning}{RESET}")
@@ -407,18 +618,21 @@ if __name__ == "__main__":
                     t_prompt = threading.Thread(target=prompt_terminal, daemon=True)
                     t_prompt.start()
                     
-                    # Wait for confirm or cancel from TTY or Web API
                     while not confirm_event.is_set() and not cancel_event.is_set():
                         time.sleep(0.1)
                         
+                    # Restart TUI
+                    start_live_display()
+                    
                     if confirm_event.is_set():
                         with state_lock:
                             state["status"] = "AIRGAP_ACTIVE"
                         execute_airgap(target_asset, action_token, auth_token, ai_reasoning)
-                        with state_lock:
-                            render_ui("AIRGAP_NODE", target_asset, auth_token, ai_reasoning, state["logs"])
+                        update_tui()
                         
-                        # Terminal restore check
+                        # Stop TUI to check restore
+                        stop_live_display()
+                        
                         def prompt_restore():
                             print(f"\n{RED}{BOLD}🚨 [AIRGAP ACTIVE] Node '{target_asset}' is isolated.{RESET}")
                             print(f"{WHITE}Press [R] to trigger restore_network.sh and recover system, or [Q] to quit: {RESET}", end="", flush=True)
@@ -435,25 +649,35 @@ if __name__ == "__main__":
 
                         t_res = threading.Thread(target=prompt_restore, daemon=True)
                         t_res.start()
+                        
+                        # Wait for restore
+                        while True:
+                            with state_lock:
+                                current_status = state["status"]
+                            if current_status == "NOMINAL":
+                                break
+                            time.sleep(0.2)
+                            
+                        start_live_display()
+                        update_tui()
                     else:
                         with state_lock:
                             state["status"] = "NOMINAL"
                         log_warn("Airgap isolation cancelled by operator override.")
-                        with state_lock:
-                            render_ui("NOMINAL", target_asset, auth_token, ai_reasoning, state["logs"])
+                        update_tui()
                 else:
                     with state_lock:
                         state["status"] = action_token
                     execute_airgap(target_asset, action_token, auth_token, ai_reasoning)
-                    with state_lock:
-                        render_ui(action_token, target_asset, auth_token, ai_reasoning, state["logs"])
+                    update_tui()
             else:
                 log_warn(f"Received unknown action code: {action_token}. No state mutation triggered.")
-                with state_lock:
-                    render_ui("NOMINAL", target_asset, auth_token, ai_reasoning, state["logs"])
+                update_tui()
                 
         except json.JSONDecodeError:
             log_err("Received malformed non-JSON data stream.")
-            with state_lock:
-                render_ui("NOMINAL", "unknown-node", "", "", state["logs"])
+            update_tui("NOMINAL", "unknown-node")
             continue
+            
+    # Stop TUI on exit
+    stop_live_display()
