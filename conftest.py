@@ -6,6 +6,7 @@ try:
     from google.genai import types as genai_types
 except (ImportError, AttributeError):
     import google
+
     mock_genai = types.ModuleType("google.genai")
     mock_genai.Client = type("Client", (), {})
     mock_types = types.ModuleType("google.genai.types")
