@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-import json
 import argparse
+import json
 import os
 import sys
+
 import jsonschema
 
 # Try importing OpenTelemetry, failing gracefully if package is missing
 try:
     from opentelemetry import trace
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+
     HAS_OTEL = True
 except ImportError:
     HAS_OTEL = False
@@ -23,20 +25,20 @@ if HAS_OTEL:
         # Define resource name
         resource = Resource(attributes={"service.name": "ransafe-ai-validator"})
         provider = TracerProvider(resource=resource)
-        
+
         # Load keys from environment (which can be populated via .env file)
         dt_url = os.environ.get("DYNATRACE_ENV_URL")
         dt_token = os.environ.get("DYNATRACE_API_TOKEN")
-        
+
         if dt_url and dt_token:
             # Point to Dynatrace OTLP traces ingest v2 endpoint
             exporter = OTLPSpanExporter(
                 endpoint=f"{dt_url.rstrip('/')}/api/v2/otlp/v1/traces",
-                headers={"Authorization": f"Api-Token {dt_token}"}
+                headers={"Authorization": f"Api-Token {dt_token}"},
             )
         else:
             exporter = ConsoleSpanExporter()
-            
+
         provider.add_span_processor(BatchSpanProcessor(exporter))
         trace.set_tracer_provider(provider)
         tracer = trace.get_tracer("ransafe_tracer")
@@ -45,12 +47,18 @@ if HAS_OTEL:
         tracer = None
 
 # Schema and Prompt Paths
-TELEMETRY_SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "../docs/telemetry_schema.json")
-EXECUTION_SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "../docs/execution_interface.json")
+TELEMETRY_SCHEMA_PATH = os.path.join(
+    os.path.dirname(__file__), "../docs/telemetry_schema.json"
+)
+EXECUTION_SCHEMA_PATH = os.path.join(
+    os.path.dirname(__file__), "../docs/execution_interface.json"
+)
+
 
 def load_json(file_path):
     with open(file_path, "r") as f:
         return json.load(f)
+
 
 def run_local_rule_engine(telemetry_payload):
     """
@@ -78,8 +86,9 @@ def run_local_rule_engine(telemetry_payload):
         "action": action,
         "target_node_id": node_id,
         "authorization_token": f"AUTH-TOKEN-{node_id}-{action}",
-        "reasoning_summary": reason
+        "reasoning_summary": reason,
     }
+
 
 def run_gemini_inference(system_prompt, telemetry_payload):
     """
@@ -111,11 +120,10 @@ def run_gemini_inference(system_prompt, telemetry_payload):
             model="gemini-2.5-flash",
             contents=input_content,
             config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                response_mime_type="application/json"
-            )
+                system_instruction=system_prompt, response_mime_type="application/json"
+            ),
         )
-        
+
         text_resp = response.text.strip()
         if text_resp.startswith("```"):
             lines = text_resp.split("\n")
@@ -133,9 +141,9 @@ def run_gemini_inference(system_prompt, telemetry_payload):
                 span.end()
             except Exception:
                 pass
-            
+
         return json.loads(text_resp)
-        
+
     except Exception as e:
         # Record exceptions to the span before failing
         if span:
@@ -148,7 +156,10 @@ def run_gemini_inference(system_prompt, telemetry_payload):
         print(f"[ERROR] Live Gemini API call failed: {e}", file=sys.stderr)
         return None
 
-def process_payload(payload, telemetry_schema, execution_schema, system_prompt, json_only):
+
+def process_payload(
+    payload, telemetry_schema, execution_schema, system_prompt, json_only
+):
     """
     Validates telemetry payload, runs Gemini inference, maps decisions,
     performs logic assertions, and returns the verified action payload.
@@ -165,7 +176,9 @@ def process_payload(payload, telemetry_schema, execution_schema, system_prompt, 
     metrics = payload["metrics"]
     if not json_only:
         print(f"  Node ID: {payload['node_id']}")
-        print(f"  Metrics: CPU={metrics['cpu_utilization_percentage']}%, Writes={metrics['filesystem_write_ops_per_sec']}/s, Entropy={metrics['entropy_coefficient']}")
+        print(
+            f"  Metrics: CPU={metrics['cpu_utilization_percentage']}%, Writes={metrics['filesystem_write_ops_per_sec']}/s, Entropy={metrics['entropy_coefficient']}"
+        )
 
     # Check for live API access
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -176,7 +189,10 @@ def process_payload(payload, telemetry_schema, execution_schema, system_prompt, 
         decision = run_gemini_inference(system_prompt, payload)
         if decision is None:
             if not json_only:
-                print("  Live API inference failed, falling back to local engine for this run...", file=sys.stderr)
+                print(
+                    "  Live API inference failed, falling back to local engine for this run...",
+                    file=sys.stderr,
+                )
             decision = run_local_rule_engine(payload)
     else:
         decision = run_local_rule_engine(payload)
@@ -194,7 +210,7 @@ def process_payload(payload, telemetry_schema, execution_schema, system_prompt, 
         jsonschema.validate(instance=decision, schema=execution_schema)
         if not json_only:
             print("✓ Decision output matches execution_interface.json schema.")
-        
+
         # 4. State assertions based on inputs vs actions
         cpu = metrics["cpu_utilization_percentage"]
         write_ops = metrics["filesystem_write_ops_per_sec"]
@@ -205,14 +221,16 @@ def process_payload(payload, telemetry_schema, execution_schema, system_prompt, 
         if cpu > 85.0 and write_ops > 200 and entropy > 0.80:
             assert action == "AIRGAP_NODE", f"Expected action AIRGAP_NODE, got {action}"
         elif cpu > 75.0 and write_ops <= 200 and entropy <= 0.80:
-            assert action == "REALLOCATE_RESOURCES", f"Expected action REALLOCATE_RESOURCES, got {action}"
-        
-        assert "authorization_token" in decision and decision["authorization_token"], "Missing authorization token"
-        assert "reasoning_summary" in decision and decision["reasoning_summary"], "Missing reasoning summary"
-        
+            assert (
+                action == "REALLOCATE_RESOURCES"
+            ), f"Expected action REALLOCATE_RESOURCES, got {action}"
+
+        assert decision.get("authorization_token"), "Missing authorization token"
+        assert decision.get("reasoning_summary"), "Missing reasoning summary"
+
         if not json_only:
             print("✓ Decision logic assertions passed successfully.")
-        
+
         return decision
     except jsonschema.exceptions.ValidationError as e:
         print(f"✗ Decision output schema validation failed: {e}", file=sys.stderr)
@@ -221,15 +239,26 @@ def process_payload(payload, telemetry_schema, execution_schema, system_prompt, 
         print(f"✗ State assertion failed: {e}", file=sys.stderr)
         return None
 
+
 def main():
-    parser = argparse.ArgumentParser(description="RanSafe Dry-run Telemetry Evaluator & Payload Validator")
-    parser.add_argument("--prompt", type=str, required=True,
-                        help="Path to system prompt file")
-    parser.add_argument("--input", type=str, required=True,
-                        help="Path to telemetry JSON file (single payload or array). Use '-' for stdin.")
-    parser.add_argument("--json-only", action="store_true",
-                        help="Output only the decision JSON to stdout; all log/debug messages go to stderr.")
-    
+    parser = argparse.ArgumentParser(
+        description="RanSafe Dry-run Telemetry Evaluator & Payload Validator"
+    )
+    parser.add_argument(
+        "--prompt", type=str, required=True, help="Path to system prompt file"
+    )
+    parser.add_argument(
+        "--input",
+        type=str,
+        required=True,
+        help="Path to telemetry JSON file (single payload or array). Use '-' for stdin.",
+    )
+    parser.add_argument(
+        "--json-only",
+        action="store_true",
+        help="Output only the decision JSON to stdout; all log/debug messages go to stderr.",
+    )
+
     args = parser.parse_args()
     json_only = args.json_only
 
@@ -238,13 +267,15 @@ def main():
         telemetry_schema = load_json(TELEMETRY_SCHEMA_PATH)
         execution_schema = load_json(EXECUTION_SCHEMA_PATH)
     except FileNotFoundError as e:
-        print(f"[ERROR] Could not load JSON schema files from /docs: {e}", file=sys.stderr)
+        print(
+            f"[ERROR] Could not load JSON schema files from /docs: {e}", file=sys.stderr
+        )
         exit(1)
 
     if not os.path.exists(args.prompt):
         print(f"[ERROR] System prompt file not found: {args.prompt}", file=sys.stderr)
         exit(1)
-        
+
     with open(args.prompt, "r") as f:
         system_prompt = f.read()
 
@@ -266,9 +297,11 @@ def main():
                     payloads = payload
                 else:
                     payloads = [payload]
-                
+
                 for p in payloads:
-                    decision = process_payload(p, telemetry_schema, execution_schema, system_prompt, json_only)
+                    decision = process_payload(
+                        p, telemetry_schema, execution_schema, system_prompt, json_only
+                    )
                     if decision:
                         success_count += 1
                         print(json.dumps(decision))
@@ -276,17 +309,24 @@ def main():
                     else:
                         failure_count += 1
             except Exception as e:
-                print(f"[ERROR] Failed to parse/process stdin line: {e}", file=sys.stderr)
+                print(
+                    f"[ERROR] Failed to parse/process stdin line: {e}", file=sys.stderr
+                )
                 failure_count += 1
     else:
         # File input mode
         if not os.path.exists(args.input):
-            print(f"[ERROR] Telemetry input file not found: {args.input}", file=sys.stderr)
+            print(
+                f"[ERROR] Telemetry input file not found: {args.input}", file=sys.stderr
+            )
             exit(1)
         try:
             telemetry_data = load_json(args.input)
         except Exception as e:
-            print(f"[ERROR] Failed to read/parse telemetry JSON file: {e}", file=sys.stderr)
+            print(
+                f"[ERROR] Failed to read/parse telemetry JSON file: {e}",
+                file=sys.stderr,
+            )
             exit(1)
 
         if isinstance(telemetry_data, list):
@@ -296,7 +336,9 @@ def main():
 
         decisions = []
         for p in payloads:
-            decision = process_payload(p, telemetry_schema, execution_schema, system_prompt, json_only)
+            decision = process_payload(
+                p, telemetry_schema, execution_schema, system_prompt, json_only
+            )
             if decision:
                 decisions.append(decision)
                 success_count += 1
@@ -311,13 +353,16 @@ def main():
             sys.stdout.flush()
         else:
             print("\n==================================")
-            print(f"Evaluation Complete: {success_count} Passed, {failure_count} Failed.")
+            print(
+                f"Evaluation Complete: {success_count} Passed, {failure_count} Failed."
+            )
             print("==================================")
 
     if failure_count > 0:
         exit(1)
     else:
         exit(0)
+
 
 if __name__ == "__main__":
     main()
